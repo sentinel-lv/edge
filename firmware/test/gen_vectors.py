@@ -1,12 +1,20 @@
-"""Generate C test cases from docs-vectors JSON (firmware README Phase 2).
+"""Generate C test cases from the shared vector JSON (firmware README Phase 2).
 
-CI gate: the C and Python arbiters must agree on every vector.
+CI gate: the C and Python arbiters must agree on every vector. The vectors
+live in the `protocol` repo, a git submodule here, so firmware, gateway and
+the backend are all held to byte-identical fixtures.
+
 Usage: python3 firmware/test/gen_vectors.py   # writes firmware/test/vectors_gen.{h,c}
 """
-import json, pathlib
+import json, pathlib, sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-VDIR = ROOT / "docs" / "vectors"
+_CANDIDATES = [
+    ROOT / "protocol" / "vectors",        # submodule (current layout)
+    ROOT.parent / "protocol" / "vectors",   # sibling checkout of the org repos
+    ROOT / "docs" / "vectors",            # pre-split layout
+]
+VDIR = next((p for p in _CANDIDATES if p.is_dir()), _CANDIDATES[0])
 OUT_C = pathlib.Path(__file__).resolve().parent / "vectors_gen.c"
 OUT_H = pathlib.Path(__file__).resolve().parent / "vectors_gen.h"
 
@@ -32,6 +40,15 @@ for fp in sorted(VDIR.glob("*.json")):
         "reason": exp.get("reason_contains", ""),
     })
 
+if not cases:
+    # A parity gate with nothing in it passes for the wrong reason. This is the
+    # whole point of the file, so refuse to emit an empty suite.
+    sys.exit(
+        f"no vectors found in {VDIR}\n"
+        "The protocol submodule is probably not checked out — run:\n"
+        "  git submodule update --init"
+    )
+
 with open(OUT_H, "w") as f:
     f.write('#pragma once\n#include "../src/arbiter.h"\n\n')
     f.write("typedef struct {\n    const char *name;\n    long long now_ms;\n    const cc_node_t *nodes;\n    int n;\n    cc_action_t exp_action;\n    int exp_span;\n    const char *exp_up, *exp_down;\n    const char *exp_reason_sub;\n} vec_case_t;\n\n")
@@ -55,4 +72,4 @@ with open(OUT_C, "w") as f:
                 f"{ACTIONS[c['action']]}, {span}, {cstr(c['reason'])}}},\n")
     f.write("};\n")
     f.write(f"const int VEC_NCASES = {len(cases)};\n")
-print(f"generated {len(cases)} cases -> {OUT_C.name}")
+print(f"generated {len(cases)} cases from {VDIR} -> {OUT_C.name}")
